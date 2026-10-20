@@ -129,6 +129,71 @@ describe("parseOpenAICompatibleTranscription", () => {
 		expect(result.words?.map((word) => word.text)).toEqual(["timestamps."]);
 	});
 
+	it("moves VAD-timeline word times onto their segment's original times", () => {
+		const result = parseOpenAICompatibleTranscription(
+			{
+				text: " Hello there. Back again.",
+				duration: 400,
+				segments: [
+					{
+						text: " Hello there.",
+						start: 4.6,
+						end: 5.6,
+						words: [
+							{ word: " Hello", start: 0.1, end: 0.5 },
+							{ word: " there.", start: 0.5, end: 1.0 },
+						],
+					},
+					{
+						text: " Back again.",
+						start: 300,
+						end: 301.2,
+						words: [
+							{ word: " Back", start: 1.2, end: 1.6 },
+							{ word: " again.", start: 1.6, end: 2.2 },
+						],
+					},
+				],
+			},
+			"turbo",
+		);
+
+		expect(
+			result.words?.map(({ text, start, end }) => ({ text, start, end })),
+		).toEqual([
+			{ text: "Hello", start: 4600, end: 5000 },
+			{ text: "there.", start: 5000, end: 5500 },
+			{ text: "Back", start: 300000, end: 300400 },
+			{ text: "again.", start: 300400, end: 301000 },
+		]);
+	});
+
+	it("keeps word times that already match their segment", () => {
+		const result = parseOpenAICompatibleTranscription(
+			{
+				text: " Hello there.",
+				duration: 10,
+				segments: [
+					{
+						text: " Hello there.",
+						start: 4.6,
+						end: 5.6,
+						words: [
+							{ word: " Hello", start: 4.7, end: 5.0 },
+							{ word: " there.", start: 5.0, end: 5.5 },
+						],
+					},
+				],
+			},
+			"turbo",
+		);
+
+		expect(result.words?.map(({ start, end }) => [start, end])).toEqual([
+			[4700, 5000],
+			[5000, 5500],
+		]);
+	});
+
 	it("keeps segment words separate when no token marks word starts", () => {
 		const result = parseOpenAICompatibleTranscription(
 			{

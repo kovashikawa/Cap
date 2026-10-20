@@ -16,6 +16,7 @@ export type OpenAICompatibleTranscription = AssemblyAIEditResult & {
 const DEFAULT_STT_MODEL = "whisper-1";
 const STT_TIMEOUT_MS = 30 * 60 * 1000;
 const ZERO_LENGTH_WORD_SPAN_MS = 200;
+const SEGMENT_ALIGNMENT_TOLERANCE_MS = 1000;
 
 export function getTranscriptionProvider(): TranscriptionProvider | null {
 	const env = serverEnv();
@@ -83,14 +84,47 @@ function wordStartsFromText(tokens: SttWord[], text: unknown) {
 	return starts;
 }
 
+// With --vad, whisper.cpp maps segment times back to the original audio but
+// leaves word times on the speech-only audio (ggml-org/whisper.cpp#3174), so
+// every word lands early by the silence removed before it.
+function alignTokensToSegment(
+	tokens: SttWord[],
+	segment: Record<string, unknown>,
+): SttWord[] {
+	const segmentStart = finiteNumber(segment.start);
+	const segmentEnd = finiteNumber(segment.end);
+	const first = tokens[0];
+	const last = tokens.at(-1);
+	if (segmentStart === null || segmentEnd === null || !first || !last) {
+		return tokens;
+	}
+	const startMs = segmentStart * 1000;
+	const endMs = segmentEnd * 1000;
+	if (
+		first.start >= startMs - SEGMENT_ALIGNMENT_TOLERANCE_MS &&
+		last.end <= endMs + SEGMENT_ALIGNMENT_TOLERANCE_MS
+	) {
+		return tokens;
+	}
+	const offset = startMs - first.start;
+	return tokens.map((token) => ({
+		...token,
+		start: Math.min(token.start + offset, endMs),
+		end: Math.min(token.end + offset, endMs),
+	}));
+}
+
 // whisper.cpp reports BPE tokens as "words" (" timest" + "amps", " Hello" + ",").
 // Unspaced scripts (CJK, Thai) only fold punctuation.
 function mergeSegmentTokens(segment: Record<string, unknown>): SttWord[] {
 	if (!Array.isArray(segment.words)) return [];
-	const tokens = segment.words
-		.filter(isRecord)
-		.map(toSttWord)
-		.filter((word): word is SttWord => word !== null);
+	const tokens = alignTokensToSegment(
+		segment.words
+			.filter(isRecord)
+			.map(toSttWord)
+			.filter((word): word is SttWord => word !== null),
+		segment,
+	);
 	const marksWordStarts = tokens.some((token) => /^\s/.test(token.text));
 	const startsFromText = wordStartsFromText(tokens, segment.text);
 	const merged: SttWord[] = [];
